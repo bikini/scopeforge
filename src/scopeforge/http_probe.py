@@ -32,6 +32,7 @@ class HttpProbeResult:
     status: int | None
     title: str | None
     headers: dict[str, str]
+    findings: list[dict[str, str]]
     error: str | None = None
 
     def as_dict(self) -> dict[str, object]:
@@ -41,6 +42,7 @@ class HttpProbeResult:
             "status": self.status,
             "title": self.title,
             "headers": self.headers,
+            "findings": self.findings,
             "error": self.error,
         }
 
@@ -73,6 +75,60 @@ def _interesting_headers(headers) -> dict[str, str]:  # type: ignore[no-untyped-
     return selected
 
 
+def analyze_http_headers(url: str, headers: dict[str, str]) -> list[dict[str, str]]:
+    parsed = urlparse(url)
+    lowered = {name.lower(): value for name, value in headers.items()}
+    findings: list[dict[str, str]] = []
+
+    if parsed.scheme == "https" and "strict-transport-security" not in lowered:
+        findings.append(
+            {
+                "id": "missing-hsts",
+                "severity": "medium",
+                "message": "HTTPS response does not include Strict-Transport-Security.",
+            }
+        )
+
+    if "content-security-policy" not in lowered:
+        findings.append(
+            {
+                "id": "missing-csp",
+                "severity": "low",
+                "message": "Response does not include Content-Security-Policy.",
+            }
+        )
+
+    if "x-content-type-options" not in lowered:
+        findings.append(
+            {
+                "id": "missing-x-content-type-options",
+                "severity": "low",
+                "message": "Response does not include X-Content-Type-Options.",
+            }
+        )
+
+    if "x-frame-options" not in lowered and "content-security-policy" not in lowered:
+        findings.append(
+            {
+                "id": "missing-clickjacking-control",
+                "severity": "low",
+                "message": "Response does not include X-Frame-Options or Content-Security-Policy.",
+            }
+        )
+
+    server = lowered.get("server", "")
+    if any(char.isdigit() for char in server):
+        findings.append(
+            {
+                "id": "server-version-disclosure",
+                "severity": "info",
+                "message": "Server header appears to disclose version information.",
+            }
+        )
+
+    return findings
+
+
 def probe_http_url(scope: Scope, url: str, *, timeout: float = 5.0) -> HttpProbeResult:
     scope.require_url(url)
     if timeout <= 0:
@@ -97,24 +153,28 @@ def probe_http_url(scope: Scope, url: str, *, timeout: float = 5.0) -> HttpProbe
             body = response.read(65536)
             final_url = response.geturl()
             scope.require_url(final_url)
+            headers = _interesting_headers(response.headers)
             return HttpProbeResult(
                 url=url,
                 final_url=final_url,
                 status=response.status,
                 title=_extract_title(body),
-                headers=_interesting_headers(response.headers),
+                headers=headers,
+                findings=analyze_http_headers(final_url, headers),
             )
     except HTTPError as exc:
         body = exc.read(65536)
         final_url = exc.geturl()
         if final_url:
             scope.require_url(final_url)
+        headers = _interesting_headers(exc.headers)
         return HttpProbeResult(
             url=url,
             final_url=final_url,
             status=exc.code,
             title=_extract_title(body),
-            headers=_interesting_headers(exc.headers),
+            headers=headers,
+            findings=analyze_http_headers(final_url or url, headers),
             error=f"HTTP {exc.code}",
         )
     except URLError as exc:
@@ -124,6 +184,7 @@ def probe_http_url(scope: Scope, url: str, *, timeout: float = 5.0) -> HttpProbe
             status=None,
             title=None,
             headers={},
+            findings=[],
             error=str(exc.reason),
         )
     except OSError as exc:
@@ -133,6 +194,7 @@ def probe_http_url(scope: Scope, url: str, *, timeout: float = 5.0) -> HttpProbe
             status=None,
             title=None,
             headers={},
+            findings=[],
             error=str(exc),
         )
 

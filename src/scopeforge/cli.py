@@ -9,7 +9,14 @@ import sys
 
 from . import __version__
 from .http_probe import probe_http
-from .ledger import EvidenceLedger
+from .inventory import (
+    build_inventory,
+    diff_inventories,
+    inventory_from_ledger,
+    read_ledger_events,
+    write_inventory_json,
+)
+from .ledger import EvidenceLedger, verify_ledger_path
 from .report import write_html_report
 from .scanner import expand_targets, scan_tcp
 from .scope import (
@@ -22,6 +29,7 @@ from .scope import (
     utc_now,
     write_scope_document,
 )
+from .tls_probe import probe_tls
 
 
 def _load_scope(args: argparse.Namespace) -> Scope:
@@ -230,6 +238,143 @@ def cmd_http(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_tls_table(results: list[dict[str, object]]) -> None:
+    print(f"{'HOST':<39} {'PORT':>5} {'STATE':<10} {'TLS':<10} {'EXPIRES':<22} SUBJECT")
+    print(f"{'-' * 39} {'-' * 5} {'-' * 10} {'-' * 10} {'-' * 22} {'-' * 36}")
+    for result in results:
+        subject = result.get("subject", {})
+        common_name = ""
+        if isinstance(subject, dict):
+            common_name = str(subject.get("commonName") or subject.get("organizationName") or "")
+        print(
+            f"{str(result['host'])[:39]:<39} "
+            f"{int(result['port']):>5} "
+            f"{str(result['state'])[:10]:<10} "
+            f"{str(result.get('tls_version') or '')[:10]:<10} "
+            f"{str(result.get('not_after') or '')[:22]:<22} "
+            f"{common_name[:80]}"
+        )
+
+
+def cmd_tls(args: argparse.Namespace) -> int:
+    scope = _load_scope(args)
+    ledger = EvidenceLedger(scope)
+    ports = parse_ports(args.ports or "443")
+    started = ledger.append(
+        "tls_probe",
+        "started",
+        {
+            "targets": args.target,
+            "ports": list(ports),
+            "timeout": args.timeout,
+            "workers": args.workers,
+        },
+    )
+    try:
+        results = probe_tls(
+            scope,
+            targets=args.target,
+            ports=ports,
+            timeout=args.timeout,
+            workers=args.workers,
+        )
+    except Exception as exc:
+        ledger.append(
+            "tls_probe",
+            "failed",
+            {
+                "started_entry_sha256": started["entry_sha256"],
+                "error": str(exc),
+            },
+        )
+        raise
+
+    result_dicts = [result.as_dict() for result in results]
+    tls_count = sum(1 for result in results if result.state == "tls")
+    ledger.append(
+        "tls_probe",
+        "completed",
+        {
+            "started_entry_sha256": started["entry_sha256"],
+            "targets": args.target,
+            "ports": list(ports),
+            "probe_count": len(results),
+            "tls_count": tls_count,
+            "results": result_dicts,
+        },
+    )
+    if args.json:
+        _print_json(result_dicts)
+    else:
+        _print_tls_table(result_dicts)
+        print(f"TLS services: {tls_count}; ledger: {ledger.path}")
+    return 0
+
+
+def _print_inventory_table(inventory: dict[str, object]) -> None:
+    assets = inventory.get("assets", [])
+    print(f"{'HOST':<39} {'OPEN_PORTS':<24} SERVICES")
+    print(f"{'-' * 39} {'-' * 24} {'-' * 48}")
+    if not isinstance(assets, list):
+        return
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        services = asset.get("services", {})
+        service_names = ", ".join(services.keys()) if isinstance(services, dict) else ""
+        open_ports = asset.get("open_ports", [])
+        open_port_text = ",".join(str(port) for port in open_ports) if isinstance(open_ports, list) else ""
+        print(f"{str(asset.get('host', ''))[:39]:<39} {open_port_text[:24]:<24} {service_names[:96]}")
+
+
+def cmd_inventory(args: argparse.Namespace) -> int:
+    scope = _load_scope(args)
+    ledger = EvidenceLedger(scope)
+    verification = ledger.verify()
+    if not verification.valid:
+        for error in verification.errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 3
+
+    inventory = inventory_from_ledger(ledger)
+    if args.out:
+        output = write_inventory_json(inventory, args.out)
+        print(f"wrote inventory: {output}")
+    if args.json:
+        _print_json(inventory)
+    elif not args.out:
+        _print_inventory_table(inventory)
+    return 0
+
+
+def _load_verified_inventory(path: str) -> dict[str, object]:
+    verification = verify_ledger_path(path)
+    if not verification.valid:
+        raise ScopeError(f"ledger verification failed for {path}: {verification.errors[0]}")
+    try:
+        events = read_ledger_events(path)
+    except FileNotFoundError as exc:
+        raise ScopeError(f"ledger file not found: {path}") from exc
+    return build_inventory(events)
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    before = _load_verified_inventory(args.before)
+    after = _load_verified_inventory(args.after)
+    diff = diff_inventories(before, after)
+    if args.json:
+        _print_json(diff)
+    else:
+        print(f"before services: {diff['before_service_count']}")
+        print(f"after services: {diff['after_service_count']}")
+        print(f"unchanged services: {diff['unchanged_service_count']}")
+        for item in diff["added_services"]:
+            print(f"ADDED   {item['host']} {item['service']}")
+        for item in diff["removed_services"]:
+            print(f"REMOVED {item['host']} {item['service']}")
+    return 0
+
+
 def cmd_ledger(args: argparse.Namespace) -> int:
     scope = _load_scope(args)
     ledger = EvidenceLedger(scope)
@@ -313,6 +458,27 @@ def build_parser() -> argparse.ArgumentParser:
     http.add_argument("--timeout", type=float, default=5.0, help="request timeout in seconds")
     http.add_argument("--json", action="store_true", help="print JSON")
     http.set_defaults(func=cmd_http)
+
+    tls = subparsers.add_parser("tls", help="collect scoped TLS certificate and protocol evidence")
+    tls.add_argument("--scope", required=True, help="scope file path")
+    tls.add_argument("--target", action="append", required=True, help="target IP, CIDR, hostname, or URL")
+    tls.add_argument("--ports", help="comma-separated TLS ports; defaults to 443")
+    tls.add_argument("--timeout", type=float, default=3.0, help="TLS connect timeout in seconds")
+    tls.add_argument("--workers", type=int, default=32, help="concurrent worker count")
+    tls.add_argument("--json", action="store_true", help="print JSON")
+    tls.set_defaults(func=cmd_tls)
+
+    inventory = subparsers.add_parser("inventory", help="build an asset inventory from the evidence ledger")
+    inventory.add_argument("--scope", required=True, help="scope file path")
+    inventory.add_argument("--out", help="write inventory JSON to this path")
+    inventory.add_argument("--json", action="store_true", help="print JSON")
+    inventory.set_defaults(func=cmd_inventory)
+
+    diff = subparsers.add_parser("diff", help="compare two evidence ledgers as asset inventories")
+    diff.add_argument("--before", required=True, help="older ledger JSONL path")
+    diff.add_argument("--after", required=True, help="newer ledger JSONL path")
+    diff.add_argument("--json", action="store_true", help="print JSON")
+    diff.set_defaults(func=cmd_diff)
 
     ledger = subparsers.add_parser("ledger", help="inspect or verify the evidence ledger")
     ledger.add_argument("--scope", required=True, help="scope file path")

@@ -7,6 +7,7 @@ import html
 import json
 from typing import Any
 
+from .inventory import build_inventory
 from .ledger import EvidenceLedger
 from .scope import Scope, utc_now
 
@@ -40,9 +41,41 @@ def _render_event_rows(events: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def _render_asset_rows(inventory: dict[str, Any]) -> str:
+    rows: list[str] = []
+    for asset in inventory.get("assets", []):
+        if not isinstance(asset, dict):
+            continue
+        services = asset.get("services", {})
+        http = asset.get("http", [])
+        tls = asset.get("tls", [])
+        service_names = ", ".join(services.keys()) if isinstance(services, dict) else ""
+        http_titles = []
+        if isinstance(http, list):
+            for item in http:
+                if isinstance(item, dict) and item.get("title"):
+                    http_titles.append(str(item["title"]))
+        tls_expiry = []
+        if isinstance(tls, list):
+            for item in tls:
+                if isinstance(item, dict) and item.get("not_after"):
+                    tls_expiry.append(f"{item.get('port')}: {item.get('not_after')}")
+        rows.append(
+            "<tr>"
+            f"<td>{_escape(asset.get('host', ''))}</td>"
+            f"<td>{_escape(', '.join(str(port) for port in asset.get('open_ports', [])))}</td>"
+            f"<td>{_escape(service_names)}</td>"
+            f"<td>{_escape('; '.join(http_titles[:4]))}</td>"
+            f"<td>{_escape('; '.join(tls_expiry[:4]))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="5">No assets discovered in ledger evidence.</td></tr>'
+
+
 def render_html_report(scope: Scope, ledger: EvidenceLedger) -> str:
     events = ledger.read_events()
     verification = ledger.verify()
+    inventory = build_inventory(events)
     summary = _event_summary(events)
     generated_at = utc_now().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     summary_items = "\n".join(
@@ -143,6 +176,21 @@ def render_html_report(scope: Scope, ledger: EvidenceLedger) -> str:
     <h2>Summary</h2>
     <ul>{summary_items}</ul>
   </section>
+  <h2>Asset Inventory</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Open Ports</th>
+        <th>Services</th>
+        <th>HTTP Titles</th>
+        <th>TLS Expiry</th>
+      </tr>
+    </thead>
+    <tbody>
+      {_render_asset_rows(inventory)}
+    </tbody>
+  </table>
   <h2>Events</h2>
   <table>
     <thead>

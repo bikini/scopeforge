@@ -13,8 +13,12 @@ active operation must pass an explicit scope check before it runs.
 - Target guard that refuses out-of-scope IPs, CIDRs, hostnames, and URLs.
 - Concurrent TCP connect probing with host-count limits and rate limiting.
 - HTTP title/header/status fingerprinting for scoped URLs.
+- HTTP security-header analysis for report-ready low-risk findings.
+- TLS certificate, protocol, cipher, SAN, expiry, and fingerprint collection.
+- Asset inventory generation from ledger evidence.
+- Ledger-to-ledger inventory diffing for change tracking between runs.
 - Hash-chained JSONL evidence ledger.
-- Standalone HTML report generation from the evidence ledger.
+- Standalone HTML report generation with an asset/service inventory.
 - Dependency-free runtime on Python 3.11+.
 
 ## Quick Start
@@ -24,7 +28,9 @@ cd C:\Users\Owner\Desktop\software\development\scopeforge
 python -m scopeforge init --path scopeforge.scope.json --engagement "Local Lab" --authorized-by "Owner" --cidr 127.0.0.1/32 --domain localhost --ports 80,443,8000,8080 --expires 2026-12-31T23:59:59Z
 python -m scopeforge check --scope scopeforge.scope.json 127.0.0.1 localhost
 python -m scopeforge scan --scope scopeforge.scope.json --target 127.0.0.1 --ports 80,443,8000,8080
-python -m scopeforge http --scope scopeforge.scope.json http://localhost:8000/
+python -m scopeforge http --scope scopeforge.scope.json --url http://localhost:8000/
+python -m scopeforge tls --scope scopeforge.scope.json --target localhost --ports 443
+python -m scopeforge inventory --scope scopeforge.scope.json --out evidence/inventory.json
 python -m scopeforge ledger --scope scopeforge.scope.json --verify
 python -m scopeforge report --scope scopeforge.scope.json --out evidence/report.html
 ```
@@ -61,8 +67,27 @@ See `examples/scope.example.json` for a complete example.
 - `plan`: summarize a safe probing plan for scoped targets and ports.
 - `scan`: run scoped TCP connect probes.
 - `http`: collect scoped HTTP status, headers, and page title.
+- `tls`: collect scoped TLS certificate and protocol metadata.
+- `inventory`: build consolidated assets and services from ledger evidence.
+- `diff`: compare two verified ledgers as asset inventories.
 - `ledger --verify`: validate the evidence ledger hash chain.
 - `report`: render a standalone HTML report from ledger events.
+
+## Advanced Workflow
+
+```powershell
+python -m scopeforge scan --scope scopeforge.scope.json --target 127.0.0.1 --ports 80,443,8000,8080
+python -m scopeforge http --scope scopeforge.scope.json --url http://localhost:8000/
+python -m scopeforge tls --scope scopeforge.scope.json --target localhost --ports 443
+python -m scopeforge inventory --scope scopeforge.scope.json --out evidence/inventory.json
+python -m scopeforge report --scope scopeforge.scope.json --out evidence/report.html
+```
+
+To compare two runs:
+
+```powershell
+python -m scopeforge diff --before evidence/ledger-before.jsonl --after evidence/ledger.jsonl
+```
 
 ## Responsible Use
 

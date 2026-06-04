@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scopeforge.ledger import EvidenceLedger
+from scopeforge.ledger import EvidenceLedger, verify_ledger_path
 from scopeforge.scope import Scope, ScopeError, create_scope_document, write_scope_document
 
 
@@ -36,6 +36,7 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(2, verification.entries)
             self.assertEqual(second["entry_sha256"], verification.last_hash)
             self.assertIsNone(first["prev_sha256"])
+            self.assertTrue(verify_ledger_path(ledger.path).valid)
 
     def test_tampering_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

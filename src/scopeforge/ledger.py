@@ -75,46 +75,51 @@ class EvidenceLedger:
         return events
 
     def verify(self) -> LedgerVerification:
-        if not self.path.exists():
-            return LedgerVerification(True, 0, None, ())
+        return verify_ledger_path(self.path)
 
-        errors: list[str] = []
-        previous: str | None = None
-        entries = 0
 
-        with self.path.open("r", encoding="utf-8") as handle:
-            for line_no, line in enumerate(handle, start=1):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                entries += 1
-                try:
-                    entry = json.loads(stripped)
-                except json.JSONDecodeError as exc:
-                    errors.append(f"line {line_no}: invalid JSON: {exc}")
-                    previous = None
-                    continue
-                if not isinstance(entry, dict):
-                    errors.append(f"line {line_no}: expected JSON object")
-                    previous = None
-                    continue
+def verify_ledger_path(path: str | Path) -> LedgerVerification:
+    ledger_path = Path(path).expanduser().resolve()
+    if not ledger_path.exists():
+        return LedgerVerification(True, 0, None, ())
 
-                expected_prev = previous
-                actual_prev = entry.get("prev_sha256")
-                if actual_prev != expected_prev:
-                    errors.append(
-                        f"line {line_no}: prev_sha256 mismatch "
-                        f"(expected {expected_prev!r}, got {actual_prev!r})"
-                    )
+    errors: list[str] = []
+    previous: str | None = None
+    entries = 0
 
-                expected_hash = _entry_hash(entry)
-                actual_hash = entry.get("entry_sha256")
-                if actual_hash != expected_hash:
-                    errors.append(
-                        f"line {line_no}: entry_sha256 mismatch "
-                        f"(expected {expected_hash}, got {actual_hash!r})"
-                    )
+    with ledger_path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            entries += 1
+            try:
+                entry = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                errors.append(f"line {line_no}: invalid JSON: {exc}")
+                previous = None
+                continue
+            if not isinstance(entry, dict):
+                errors.append(f"line {line_no}: expected JSON object")
+                previous = None
+                continue
 
-                previous = actual_hash if isinstance(actual_hash, str) else expected_hash
+            expected_prev = previous
+            actual_prev = entry.get("prev_sha256")
+            if actual_prev != expected_prev:
+                errors.append(
+                    f"line {line_no}: prev_sha256 mismatch "
+                    f"(expected {expected_prev!r}, got {actual_prev!r})"
+                )
 
-        return LedgerVerification(not errors, entries, previous, tuple(errors))
+            expected_hash = _entry_hash(entry)
+            actual_hash = entry.get("entry_sha256")
+            if actual_hash != expected_hash:
+                errors.append(
+                    f"line {line_no}: entry_sha256 mismatch "
+                    f"(expected {expected_hash}, got {actual_hash!r})"
+                )
+
+            previous = actual_hash if isinstance(actual_hash, str) else expected_hash
+
+    return LedgerVerification(not errors, entries, previous, tuple(errors))
