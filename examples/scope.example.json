@@ -1,0 +1,23 @@
+{
+  "engagement": "Local Lab",
+  "authorized_by": "Owner",
+  "expires": "2026-12-31T23:59:59Z",
+  "cidrs": [
+    "127.0.0.1/32",
+    "192.168.56.0/24"
+  ],
+  "domains": [
+    "localhost",
+    "*.lab.example"
+  ],
+  "ports": [
+    80,
+    443,
+    8000,
+    8080,
+    8443
+  ],
+  "rate_limit_per_second": 25,
+  "max_hosts": 1024,
+  "evidence_dir": "evidence"
+}
